@@ -1,0 +1,8 @@
+---
+title: "Analysis of Weight-Lifting Exercise Data"
+author: "Jeremy Peach"
+date: "Sunday, September 27, 2015"
+output: html_document
+---
+
+This is where the analysis will go.
