@@ -5,4 +5,129 @@ date: "Sunday, September 27, 2015"
 output: html_document
 ---
 
-This is where the analysis will go.
+This project will analyze data produced by a Human Activity Recognition study.
+Researchers attached motion sensors to test subjects and had them perform
+various weight-lifting exercises in a correct fashion and several incorrect
+fashions.  Information about the study can be found at:  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises](http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises)
+
+By applying machine learning techniques to the data, we can build a model that
+will allow us to predict if an exercise is being performed correctly or incorrectly
+based on the sensor readings.
+
+```{r initialization, echo=FALSE, message=FALSE}
+require(caret)
+
+# download the data if it is not already present
+setInternet2(use = TRUE);
+
+if (file.exists("pml-training.csv") == FALSE) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                  "pml-training.csv")
+}
+
+if (file.exists("pml-testing.csv") == FALSE) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                  "pml-testing.csv")
+}
+```
+
+After downloading the data, we use R to read the raw data into a data frame.
+```{r}
+training <- read.csv("pml-training.csv", na.strings=c("NA", "#DIV/0!"))
+```
+
+
+The data set includes `r ncol(training)` variables.  Not all of those will be
+needed for making our predictions so the first task is to remove those extra variables.
+We begin by removing the first seven variables because they are artifacts of
+the experiment and not related to the prediction.  This includes the test subject's
+name, the window number, and the time stamp.
+```{r, echo=FALSE}
+columnsToRemove <- c("X", "user_name", "raw_timestamp_part_1",
+                     "raw_timestamp_part_2", "cvtd_timestamp", "new_window",
+                     "num_window")
+training <- training[, !(names(training) %in% columnsToRemove)]
+```
+
+We also want to remove any columns that contain NA values because they will not
+be able to contribute to the prediction algorithms.
+```{r}
+completeCols <- sapply(training, function(x) !any(is.na(x)))
+training <- training[, completeCols]
+```
+
+This leaves us with `r ncol(training)` variables.
+
+Our next step will be to sub-divide the training set into two separate sets of
+data.  We will use the larger set to train our prediction model.  We set aside
+the smaller model so we can test our model later.  This will allow us to perform
+cross-validation and estimate the out-of-sample error rate.
+```{r}
+set.seed(978348503)
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+crossVal <- training[-inTrain,]
+training <- training[inTrain,]
+```
+
+Before we build our prediction model, we will want to remove any variables that
+are highly correlated with another variable.  Using the `findCorrelation` function,
+we can identify variables that have a correlation of 0.75 or greater and then
+remove those variables from the training set.
+```{r}
+corMatrix <- cor(training[, 1:ncol(training)-1])
+highlyCorrelatedColumns <- findCorrelation(corMatrix, cutoff = 0.75)
+training <- training[, -highlyCorrelatedColumns]
+```
+
+We have now whittled our training set down to just `r ncol(training)` variables.
+The data set should now be clean enough that we can apply some machine learning
+algorithms and build a prediction model.
+
+```{r, echo=FALSE, message=FALSE}
+rpartFit <- train(classe ~ ., data=training, method="rpart")
+rpartPredictions <- predict(rpartFit, newdata=training)
+rpartCM <- confusionMatrix(rpartPredictions, training$classe)
+```
+Initially, we tried to build a classification tree using caret's `rpart` method.
+However, that model was only `r round(rpartCM$overall[1] * 100, 2)`% accurate.
+That's not very accurate at all.
+
+To get a more accurate model, we used the random forest method.
+```{r, message=FALSE}
+fitControl <- trainControl(method = "none")
+tgrid <- expand.grid(mtry=c(6)) 
+rfFit <- train(classe ~ ., data = training, method = "rf", trControl = fitControl, tuneGrid = tgrid)
+rfPredictions <- predict(rfFit, newdata=training)
+rfCM <- confusionMatrix(rfPredictions, training$classe)
+inSampleErrorRate <- 1 - rfCM$overall[1]
+oobErrorRate <- tail(rfFit$finalModel$err.rate[,1], n=1)
+```
+This yields a much more accurate model with an accuracy rate of
+`r round(rfCM$overall[1] * 100, 2)`%.  That's about as good as we could hope for
+so this is the model we will use.
+
+For this model, the in-sample error rate is `r round(inSampleErrorRate * 100, 4)`%.
+However, the in-sample error rate is always optimistic since it was derived from
+the same data we used to train the model.  Therefore, we expect the out-of-sample
+error rate to be higher than `r round(inSampleErrorRate * 100, 4)`%.  The
+random forest method produces an "out-of-bag error rate" that estimates what
+the out-of-sample error will be.  For our model, the OOB error rate is
+`r round(oobErrorRate * 100, 4)`%.  **We expect the out-of-sample error
+rate will be very close to `r round(oobErrorRate * 100, 4)`%.**
+
+We can verify this estimation using cross-validation.  We will apply the model
+to the `crossVal` data set that we set aside before training the model.  This
+will allow us to test our model against data that was not used in the training process.
+```{r, message=FALSE}
+crossValPredictions <- predict(rfFit, newdata=crossVal)
+crossValCM <- confusionMatrix(crossValPredictions, crossVal$classe)
+outOfSampleErrorRate <- 1 - crossValCM$overall[1]
+```
+
+**The out-of-sample error rate obtained using cross-validation is
+`r round(outOfSampleErrorRate * 100, 4)`%.**
+
+With such a low out-of-sample error rate, we can be confident that our model
+will be quite accurate when used to predict values based on new data.  The model
+will predict the activity class based on data provided by the activity monitors.

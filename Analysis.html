@@ -67,7 +67,43 @@ img {
 </div>
 
 
-<p>This is where the analysis will go.</p>
+<p>This project will analyze data produced by a Human Activity Recognition study. Researchers attached motion sensors to test subjects and had them perform various weight-lifting exercises in a correct fashion and several incorrect fashions. Information about the study can be found at:<br />
+     <a href="http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises" class="uri">http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises</a></p>
+<p>By applying machine learning techniques to the data, we can build a model that will allow us to predict if an exercise is being performed correctly or incorrectly based on the sensor readings.</p>
+<p>After downloading the data, we use R to read the raw data into a data frame.</p>
+<pre class="r"><code>training &lt;- read.csv(&quot;pml-training.csv&quot;, na.strings=c(&quot;NA&quot;, &quot;#DIV/0!&quot;))</code></pre>
+<p>The data set includes 160 variables. Not all of those will be needed for making our predictions so the first task is to remove those extra variables. We begin by removing the first seven variables because they are artifacts of the experiment and not related to the prediction. This includes the test subject’s name, the window number, and the time stamp.</p>
+<p>We also want to remove any columns that contain NA values because they will not be able to contribute to the prediction algorithms.</p>
+<pre class="r"><code>completeCols &lt;- sapply(training, function(x) !any(is.na(x)))
+training &lt;- training[, completeCols]</code></pre>
+<p>This leaves us with 53 variables.</p>
+<p>Our next step will be to sub-divide the training set into two separate sets of data. We will use the larger set to train our prediction model. We set aside the smaller model so we can test our model later. This will allow us to perform cross-validation and estimate the out-of-sample error rate.</p>
+<pre class="r"><code>set.seed(978348503)
+inTrain &lt;- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+crossVal &lt;- training[-inTrain,]
+training &lt;- training[inTrain,]</code></pre>
+<p>Before we build our prediction model, we will want to remove any variables that are highly correlated with another variable. Using the <code>findCorrelation</code> function, we can identify variables that have a correlation of 0.75 or greater and then remove those variables from the training set.</p>
+<pre class="r"><code>corMatrix &lt;- cor(training[, 1:ncol(training)-1])
+highlyCorrelatedColumns &lt;- findCorrelation(corMatrix, cutoff = 0.75)
+training &lt;- training[, -highlyCorrelatedColumns]</code></pre>
+<p>We have now whittled our training set down to just 35 variables. The data set should now be clean enough that we can apply some machine learning algorithms and build a prediction model.</p>
+<p>Initially, we tried to build a classification tree using caret’s <code>rpart</code> method. However, that model was only 52.68% accurate. That’s not very accurate at all.</p>
+<p>To get a more accurate model, we used the random forest method.</p>
+<pre class="r"><code>fitControl &lt;- trainControl(method = &quot;none&quot;)
+tgrid &lt;- expand.grid(mtry=c(6)) 
+rfFit &lt;- train(classe ~ ., data = training, method = &quot;rf&quot;, trControl = fitControl, tuneGrid = tgrid)
+rfPredictions &lt;- predict(rfFit, newdata=training)
+rfCM &lt;- confusionMatrix(rfPredictions, training$classe)
+inSampleErrorRate &lt;- 1 - rfCM$overall[1]
+oobErrorRate &lt;- tail(rfFit$finalModel$err.rate[,1], n=1)</code></pre>
+<p>This yields a much more accurate model with an accuracy rate of 100%. That’s about as good as we could hope for so this is the model we will use.</p>
+<p>For this model, the in-sample error rate is 0%. However, the in-sample error rate is always optimistic since it was derived from the same data we used to train the model. Therefore, we expect the out-of-sample error rate to be higher than 0%. The random forest method produces an “out-of-bag error rate” that estimates what the out-of-sample error will be. For our model, the OOB error rate is 0.6843%. <strong>We expect the out-of-sample error rate will be very close to 0.6843%.</strong></p>
+<p>We can verify this estimation using cross-validation. We will apply the model to the <code>crossVal</code> data set that we set aside before training the model. This will allow us to test our model against data that was not used in the training process.</p>
+<pre class="r"><code>crossValPredictions &lt;- predict(rfFit, newdata=crossVal)
+crossValCM &lt;- confusionMatrix(crossValPredictions, crossVal$classe)
+outOfSampleErrorRate &lt;- 1 - crossValCM$overall[1]</code></pre>
+<p><strong>The out-of-sample error rate obtained using cross-validation is 0.7816%.</strong></p>
+<p>With such a low out-of-sample error rate, we can be confident that our model will be quite accurate when used to predict values based on new data. The model will predict the activity class based on data provided by the activity monitors.</p>
 
 
 </div>
